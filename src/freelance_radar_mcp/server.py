@@ -98,6 +98,9 @@ async def search_jobs(query: str = "", category: str = "", limit: int = 10) -> d
     return {
         "sources_used": used,
         "sources_skipped": skipped,
+        # Explicit so a caller can't mistake a total connector failure for
+        # "this search legitimately had no matches".
+        "all_sources_failed": not used,
         "count": len(postings),
         "jobs": [p.to_dict() for p in postings],
     }
@@ -124,6 +127,7 @@ async def score_opportunities(
     return {
         "sources_used": used,
         "sources_skipped": skipped,
+        "all_sources_failed": not used,
         "count": len(scored),
         "ranked": [s.to_dict() for s in scored],
     }

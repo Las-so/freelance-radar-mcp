@@ -15,17 +15,23 @@ and behind a proxy that requires a custom root CA.
 from __future__ import annotations
 
 import os
+import ssl
 
 import httpx
 
 _CA_ENV_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
 
 
-def _resolve_verify() -> str | bool:
+def _resolve_verify() -> ssl.SSLContext | bool:
+    """Return an SSL context trusting the environment's CA bundle, or True.
+
+    Never returns False: verification is never disabled, only pointed at a
+    different (still validating) trust store.
+    """
     for var in _CA_ENV_VARS:
         path = os.environ.get(var)
         if path and os.path.isfile(path):
-            return path
+            return ssl.create_default_context(cafile=path)
     return True  # httpx default: use its bundled certifi store
 
 

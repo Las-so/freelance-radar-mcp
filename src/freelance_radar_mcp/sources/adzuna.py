@@ -68,6 +68,12 @@ async def search(
         if owns_client:
             await client.aclose()
 
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Adzuna returned {type(data).__name__}, expected a JSON object — "
+            "the API shape may have changed."
+        )
+
     postings: list[JobPosting] = []
     for job in data.get("results", [])[:limit]:
         company = (job.get("company") or {}).get("display_name", "")
