@@ -18,7 +18,7 @@ from ..http import make_client
 from ..models import JobPosting
 
 BASE_URL = "https://remotive.com/api/remote-jobs"
-USER_AGENT = "freelance-radar-mcp/0.1 (+https://github.com/)"
+USER_AGENT = "freelance-radar-mcp/0.1 (+https://github.com/Las-so/freelance-radar-mcp)"
 
 
 async def search(

@@ -1,5 +1,7 @@
 # freelance-radar-mcp
 
+[![test](https://github.com/Las-so/freelance-radar-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/Las-so/freelance-radar-mcp/actions/workflows/test.yml)
+
 An [MCP](https://modelcontextprotocol.io) server that searches **official, public
 job/freelance APIs** and, optionally, scores results against your own capability
 keywords. No scraping, no unofficial endpoints, no shared or embedded credentials —
@@ -39,7 +41,7 @@ more file in `src/freelance_radar_mcp/sources/` that returns the shared
 ## Install
 
 ```bash
-git clone <this repo>
+git clone https://github.com/Las-so/freelance-radar-mcp.git
 cd freelance-radar-mcp
 pip install -e ".[dev]"
 ```
