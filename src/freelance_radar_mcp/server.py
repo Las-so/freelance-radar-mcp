@@ -15,8 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
+from .errors import SOURCE_CAVEATS, error, ok, validate_limit
 from .http import make_client
 from .models import JobPosting
 from .scoring import score_jobs
@@ -36,11 +37,19 @@ mcp = FastMCP(
 )
 
 
-async def _gather_jobs(query: str | None, category: str | None, limit: int) -> tuple[list[JobPosting], list[str], list[str]]:
+async def _gather_jobs(
+    query: str | None,
+    category: str | None,
+    limit: int,
+    ctx: Context = None,  # injected by FastMCP
+) -> tuple[list[JobPosting], list[str], list[str], list[str]]:
     """Fan out to every configured source in parallel.
 
-    Returns (postings, sources_used, sources_skipped_with_reason).
+    Returns (postings, sources_used, sources_failed, sources_not_configured).
     """
+    if ctx is not None:
+        await ctx.report_progress(0, 100, "contacting sources")
+
     async with make_client() as client:
         tasks: list[asyncio.Task] = []
         labels: list[str] = []
@@ -54,6 +63,9 @@ async def _gather_jobs(query: str | None, category: str | None, limit: int) -> t
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    if ctx is not None:
+        await ctx.report_progress(70, 100, "normalizing results")
+
     postings: list[JobPosting] = []
     used: list[str] = []
     skipped: list[str] = []
@@ -65,28 +77,36 @@ async def _gather_jobs(query: str | None, category: str | None, limit: int) -> t
         used.append(label)
         postings.extend(result)
 
+    not_configured: list[str] = []
     if not adzuna.is_configured():
-        skipped.append("adzuna: ADZUNA_APP_ID/ADZUNA_APP_KEY not set (optional source, skipped cleanly)")
+        not_configured.append("adzuna: ADZUNA_APP_ID/ADZUNA_APP_KEY not set")
 
-    return postings, used, skipped
+    if ctx is not None:
+        await ctx.report_progress(100, 100, "done")
+
+    return postings, used, skipped, not_configured
 
 
 @mcp.tool()
 def source_status() -> dict:
     """Report which job sources are live and why — call this first to see
     what you're actually querying before trusting the results."""
-    return {
-        "remotive": {"configured": True, "auth": "none (public API)"},
-        "adzuna": {
+    return ok(
+        remotive={"configured": True, "auth": "none (public API)",
+                  "caveat": SOURCE_CAVEATS["remotive"]},
+        adzuna={
             "configured": adzuna.is_configured(),
             "auth": "app_id + app_key (env vars ADZUNA_APP_ID / ADZUNA_APP_KEY)",
             "signup_url": "https://developer.adzuna.com/",
+            "caveat": SOURCE_CAVEATS["adzuna"],
         },
-    }
+    )
 
 
 @mcp.tool()
-async def search_jobs(query: str = "", category: str = "", limit: int = 10) -> dict:
+async def search_jobs(
+    query: str = "", category: str = "", limit: int = 10, ctx: Context = None
+) -> dict:
     """Search every configured job source and return normalized postings.
 
     Args:
@@ -94,16 +114,30 @@ async def search_jobs(query: str = "", category: str = "", limit: int = 10) -> d
         category: optional Remotive category slug, e.g. "software-dev".
         limit: max postings per source (1-50).
     """
-    postings, used, skipped = await _gather_jobs(query or None, category or None, max(1, min(limit, 50)))
-    return {
-        "sources_used": used,
-        "sources_skipped": skipped,
-        # Explicit so a caller can't mistake a total connector failure for
-        # "this search legitimately had no matches".
-        "all_sources_failed": not used,
-        "count": len(postings),
-        "jobs": [p.to_dict() for p in postings],
-    }
+    n, bad, clamped_from = validate_limit(limit)
+    if bad:
+        return bad
+
+    postings, used, failed, unconfigured = await _gather_jobs(
+        query or None, category or None, n, ctx
+    )
+    if not used:
+        return error(
+            "all_sources_failed",
+            "Every configured source failed; these results are not an empty search.",
+            sources_failed=failed,
+            sources_not_configured=unconfigured,
+        )
+    return ok(
+        sources_used=used,
+        sources_failed=failed,
+        sources_not_configured=unconfigured,
+        caveats={s: SOURCE_CAVEATS[s] for s in used if s in SOURCE_CAVEATS},
+        filtered_locally=bool(query or category),
+        limit_clamped_from=clamped_from,
+        count=len(postings),
+        jobs=[p.to_dict() for p in postings],
+    )
 
 
 @mcp.tool()
@@ -112,6 +146,7 @@ async def score_opportunities(
     query: str = "",
     category: str = "",
     limit: int = 15,
+    ctx: Context = None,  # injected by FastMCP
 ) -> dict:
     """Search job sources, then score every result against your own capability
     keywords (0-100, title matches weighted 2x body matches). Highest score first.
@@ -122,15 +157,41 @@ async def score_opportunities(
         category: optional Remotive category slug.
         limit: max postings per source before scoring.
     """
-    postings, used, skipped = await _gather_jobs(query or None, category or None, max(1, min(limit, 50)))
+    if not capability_keywords or not any(
+        isinstance(k, str) and k.strip() for k in capability_keywords
+    ):
+        return error(
+            "invalid_input",
+            "capability_keywords must contain at least one non-blank keyword; "
+            "blank keywords score every posting 0 and the ranking is noise.",
+            field="capability_keywords",
+        )
+
+    n, bad, clamped_from = validate_limit(limit)
+    if bad:
+        return bad
+
+    postings, used, failed, unconfigured = await _gather_jobs(
+        query or None, category or None, n, ctx
+    )
+    if not used:
+        return error(
+            "all_sources_failed",
+            "Every configured source failed; this ranking is not an empty result set.",
+            sources_failed=failed,
+            sources_not_configured=unconfigured,
+        )
     scored = score_jobs(postings, capability_keywords)
-    return {
-        "sources_used": used,
-        "sources_skipped": skipped,
-        "all_sources_failed": not used,
-        "count": len(scored),
-        "ranked": [s.to_dict() for s in scored],
-    }
+    return ok(
+        sources_used=used,
+        sources_failed=failed,
+        sources_not_configured=unconfigured,
+        caveats={s: SOURCE_CAVEATS[s] for s in used if s in SOURCE_CAVEATS},
+        filtered_locally=bool(query or category),
+        limit_clamped_from=clamped_from,
+        count=len(scored),
+        ranked=[s.to_dict() for s in scored],
+    )
 
 
 def main() -> None:

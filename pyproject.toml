@@ -6,15 +6,23 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "D. Henso" }]
+# Upper bounds are deliberate. A breaking release of either dependency takes
+# this server down with no change on our side; a ceiling turns that into a
+# loud install failure instead of a silent runtime break.
 dependencies = [
-    "mcp>=1.6.0",
-    "httpx>=0.27.0",
+    # Floor is 1.16.0, not 1.6.0, and that is load-bearing. Verified by
+    # installing each version into a clean venv: on 1.9.0-1.13.1 FastMCP does
+    # issubclass() on a `Context` annotation and raises TypeError at IMPORT,
+    # so the server never starts. 1.6.0 also no longer installs against
+    # current pydantic. Ceilings turn a breaking release into a loud failure.
+    "mcp>=1.16.0,<2.0.0",
+    "httpx>=0.27.0,<1.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
+    "pytest>=8.0.0,<9.0.0",
+    "pytest-asyncio>=0.24.0,<1.0.0",
 ]
 
 [project.scripts]
@@ -26,3 +34,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/freelance_radar_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
